@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+runs/
+outputs/
+*.log
+.DS_Store
+.env
+.env.*
+.npmrc
+auth.json
+auth-state*.json
+browser-state*.json
+storage-state*.json
+*.storage-state.json
+*.har
+*.webm

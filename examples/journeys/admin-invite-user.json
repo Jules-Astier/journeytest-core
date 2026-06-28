@@ -1,0 +1,64 @@
+{
+  "id": "admin-invite-user",
+  "title": "Admin invites a teammate",
+  "app": {
+    "name": "Acme Admin",
+    "baseUrl": "http://127.0.0.1:3000",
+    "allowedOrigins": ["http://127.0.0.1:3000"]
+  },
+  "testerProfile": "admin",
+  "objective": "Invite a new teammate as a workspace admin.",
+  "preconditions": [
+    "The tester is authenticated as an admin.",
+    "The workspace can safely create disposable test invitations."
+  ],
+  "data": {
+    "email": "test+invite@example.com",
+    "role": "Member"
+  },
+  "tasks": [
+    {
+      "id": "find-user-management",
+      "instruction": "Find where admins manage users, members, or teammates.",
+      "expectedOutcome": "The tester reaches a user management area."
+    },
+    {
+      "id": "send-invite",
+      "instruction": "Invite the test email address as a Member.",
+      "expectedOutcome": "The app accepts the invite request."
+    },
+    {
+      "id": "verify-confirmation",
+      "instruction": "Confirm whether the app clearly communicates that the invitation was sent.",
+      "expectedOutcome": "The tester can point to visible confirmation."
+    }
+  ],
+  "passCriteria": [
+    {
+      "id": "invite-confirmed",
+      "statement": "The app clearly confirms that the invitation was sent to the specified email address.",
+      "requiredEvidence": ["videoTimestamp", "screenshot", "agentObservation"],
+      "severity": "critical"
+    }
+  ],
+  "failCriteria": [
+    {
+      "id": "cannot-find-user-management",
+      "statement": "The tester cannot reasonably find where admins manage users, members, or teammates.",
+      "severity": "major"
+    },
+    {
+      "id": "invite-not-confirmed",
+      "statement": "The invite action appears to complete but the app does not clearly confirm that the invitation was sent.",
+      "severity": "critical"
+    }
+  ],
+  "blockerCriteria": [
+    {
+      "id": "auth-blocked",
+      "statement": "The tester cannot access the admin area because authentication, permissions, or missing seed data blocks the journey.",
+      "severity": "critical"
+    }
+  ],
+  "riskLevel": "writes-test-data"
+}

@@ -1,0 +1,19 @@
+{
+  "id": "admin",
+  "name": "Workspace Admin",
+  "role": "Admin",
+  "perspective": "Responsible for managing workspace users, permissions, and operational setup.",
+  "permissions": [
+    "Can access admin settings",
+    "Can invite users",
+    "Can review user status"
+  ],
+  "goals": [
+    "Complete admin tasks without developer knowledge",
+    "Understand whether actions succeeded"
+  ],
+  "constraints": [
+    "Use only normal in-app UI",
+    "Do not use backend dashboards"
+  ]
+}

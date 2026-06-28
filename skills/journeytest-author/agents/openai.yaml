@@ -1,0 +1,4 @@
+interface:
+  display_name: "JourneyTest Author"
+  short_description: "Draft agent-testable journeys and data lifecycle setup"
+  default_prompt: "Use $journeytest-author to create JourneyTest tester profiles, user journeys, and any needed data lifecycle setup or validation for this web app."
