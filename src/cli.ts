@@ -824,7 +824,7 @@ export async function runCli(
             console.log(`Shared browser session: ${sharedBrowserSessionName}`);
             if (options.video ?? true) {
               console.log(
-                "Shared-tab video recording is serialized only around action clips because agent-browser supports one active recording per session.",
+                "Shared-tab video recording is serialized per journey because agent-browser supports one active recording per session.",
               );
             }
           }

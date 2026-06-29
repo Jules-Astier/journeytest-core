@@ -349,6 +349,120 @@ describe("AgentBrowserDriver shared tabs", () => {
     expect(secondOpenIndex).toBeGreaterThan(recordStopIndex);
   });
 
+  it("serializes repeated recordings across shared tabs under stress", async () => {
+    const { command, logPath } = await createStubAgentBrowserCommand({
+      delayRecordStartMs: 5,
+      delayRecordStopMs: 5,
+    });
+    const sessionName = "suite-recording-stress";
+    const drivers = ["a", "b", "c"].map(
+      () => new AgentBrowserDriver({ command }),
+    );
+
+    await Promise.all(
+      drivers.map((driver, index) =>
+        driver.start({
+          runId: `run-stress-${index}`,
+          runDir: `/tmp/run-stress-${index}`,
+          baseUrl: "http://127.0.0.1:3000",
+          allowedOrigins,
+          sessionName,
+          tabLabel: `journey-stress-${index}`,
+        }),
+      ),
+    );
+
+    await Promise.all(
+      drivers.map(async (driver, driverIndex) => {
+        for (let clipIndex = 0; clipIndex < 4; clipIndex++) {
+          await driver.startRecording(
+            `/tmp/run-stress-${driverIndex}/clip-${clipIndex}.webm`,
+          );
+          await driver.click(`@stress-${driverIndex}-${clipIndex}`);
+          await driver.stopRecording();
+        }
+      }),
+    );
+    await Promise.all(drivers.map((driver) => driver.close()));
+
+    const calls = await readCommandLog(logPath);
+    let activeRecording: string[] | undefined;
+    let startCount = 0;
+    let stopCount = 0;
+
+    for (const args of calls) {
+      if (args[2] === "record" && args[3] === "start") {
+        expect(activeRecording).toBeUndefined();
+        activeRecording = args;
+        startCount++;
+      }
+      if (args[2] === "record" && args[3] === "stop") {
+        expect(activeRecording).toBeDefined();
+        activeRecording = undefined;
+        stopCount++;
+      }
+    }
+
+    expect(activeRecording).toBeUndefined();
+    expect(startCount).toBe(12);
+    expect(stopCount).toBe(12);
+  });
+
+  it("releases queued shared tab work as soon as recording stop completes", async () => {
+    const { command, logPath } = await createStubAgentBrowserCommand({
+      delayRecordStopMs: 75,
+    });
+    const sessionName = "suite-recording-release";
+    const first = new AgentBrowserDriver({ command });
+    const second = new AgentBrowserDriver({ command });
+
+    await Promise.all([
+      first.start({
+        runId: "run-release-a",
+        runDir: "/tmp/run-release-a",
+        baseUrl: "http://127.0.0.1:3000",
+        allowedOrigins,
+        sessionName,
+        tabLabel: "journey-release-a",
+      }),
+      second.start({
+        runId: "run-release-b",
+        runDir: "/tmp/run-release-b",
+        baseUrl: "http://127.0.0.1:3000",
+        allowedOrigins,
+        sessionName,
+        tabLabel: "journey-release-b",
+      }),
+    ]);
+
+    await first.startRecording("/tmp/run-release-a/video.webm");
+    const blockedOpen = second
+      .open("http://127.0.0.1:3000/released")
+      .then(() => Date.now());
+
+    await expect(
+      Promise.race([blockedOpen, delay(25).then(() => "blocked")]),
+    ).resolves.toBe("blocked");
+
+    const stopStartedAt = Date.now();
+    await first.stopRecording();
+    const openedAt = await blockedOpen;
+    await Promise.all([first.close(), second.close()]);
+
+    expect(openedAt - stopStartedAt).toBeLessThan(250);
+
+    const calls = await readCommandLog(logPath);
+    const recordStopIndex = calls.findIndex(
+      (args) => args[2] === "record" && args[3] === "stop",
+    );
+    const secondOpenIndex = calls.findIndex((args) =>
+      args.includes("http://127.0.0.1:3000/released"),
+    );
+
+    expect(recordStopIndex).toBeGreaterThanOrEqual(0);
+    expect(secondOpenIndex).toBeGreaterThan(recordStopIndex);
+  });
+
   it("counts queued shared starts before tab creation completes", async () => {
     const { command, logPath } = await createStubAgentBrowserCommand({
       delayedTabLabel: "journey-queued-b",
@@ -406,6 +520,8 @@ describe("AgentBrowserDriver shared tabs", () => {
 interface StubAgentBrowserOptions {
   delayedTabLabel?: string;
   delayedTabMs?: number;
+  delayRecordStartMs?: number;
+  delayRecordStopMs?: number;
   failRecordStopTimes?: number;
   failTabSelectLabels?: string[];
   failTabNewTimes?: number;
@@ -461,6 +577,12 @@ if (
   args.at(-1) === options.delayedTabLabel
 ) {
   sleep(options.delayedTabMs);
+}
+if (args.at(-3) === "record" && args.at(-2) === "start" && options.delayRecordStartMs) {
+  sleep(options.delayRecordStartMs);
+}
+if (args.at(-2) === "record" && args.at(-1) === "stop" && options.delayRecordStopMs) {
+  sleep(options.delayRecordStopMs);
 }
 if (args.at(-4) === "tab" && args.at(-3) === "new" && args.at(-2) === "--label") {
   const state = readState();

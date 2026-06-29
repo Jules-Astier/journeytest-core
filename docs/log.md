@@ -16,3 +16,5 @@
 - Added release automation documentation for Conventional Commits,
   semantic-release version calculation, generated changelogs, GitHub releases,
   npm publishing, and the one-time `v0.1.1` bootstrap tag.
+- Updated video documentation to describe journey-scoped `video.webm` recording
+  instead of action clip stitching.

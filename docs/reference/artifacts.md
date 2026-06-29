@@ -6,7 +6,7 @@ tags:
   - journeytest
   - artifacts
   - evidence
-timestamp: 2026-06-29T10:33:26Z
+timestamp: 2026-06-29T17:24:07Z
 source_files:
   - README.md
   - src/core/schemas.ts
@@ -29,7 +29,6 @@ runs/<timestamp>-<journey-id>/
   report.md
   run.json
   video.webm
-  video-clips/
   screenshots/
   snapshots/
   console/
@@ -62,9 +61,9 @@ runs/<timestamp>-run/
 
 `run.json` has `schemaVersion: "0.1"` and includes run identity, journey id,
 tester profile id, run status, model metadata, optional verdict, optional error,
-bookmarks, video processing metadata, optional data lifecycle execution,
-attempts, flake metadata, quarantine metadata, browser environment, artifacts,
-and timeline events.
+bookmarks, optional video processing metadata, optional data lifecycle
+execution, attempts, flake metadata, quarantine metadata, browser environment,
+artifacts, and timeline events.
 
 ## Human Review
 
@@ -74,9 +73,9 @@ console/network captures, UI-change timelines, raw JSON, video, and bookmarks.
 
 ## Video and Bookmarks
 
-When video is enabled, JourneyTest records short clips around browser actions
-and stitches them into `video.webm` when possible. Bookmarks are generated from
-UI actions and can be curated into chapter-style labels.
+When video is enabled, JourneyTest records one journey-scoped `video.webm`.
+Bookmarks are generated from UI actions and can be curated into chapter-style
+labels that seek into that recording.
 
 ## Secret Handling
 

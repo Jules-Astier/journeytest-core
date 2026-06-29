@@ -6,7 +6,7 @@ tags:
   - journeytest
   - architecture
   - runner
-timestamp: 2026-06-29T10:33:26Z
+timestamp: 2026-06-29T17:24:07Z
 source_files:
   - src/core/schemas.ts
   - src/core/validation.ts
@@ -35,8 +35,7 @@ runner, reporters, and lifecycle adapters replaceable.
 7. The browser driver starts with the journey app target, allowed origins,
    session settings, optional stored state, and browser environment.
 8. The director receives the journey, tester profile, browser tool surface,
-   artifact directories, event recorder, action video recorder, and UI-change
-   options.
+   artifact directories, event recorder, and UI-change options.
 9. The director performs the journey and returns an `AgentVerdict`.
 10. The runner validates and redacts the verdict, closes the browser, runs
     postconditions and cleanup, gathers artifacts, optionally curates bookmarks,

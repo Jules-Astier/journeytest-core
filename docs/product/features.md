@@ -6,7 +6,7 @@ tags:
   - journeytest
   - features
   - cli
-timestamp: 2026-06-29T10:36:52Z
+timestamp: 2026-06-29T17:24:07Z
 source_files:
   - README.md
   - package.json
@@ -55,8 +55,7 @@ source_files:
 - Each journey writes `events.ndjson`, `run.json`, `report.md`,
   `dashboard.html`, screenshots, snapshots, console captures, network captures,
   UI-change timelines, and video artifacts when enabled.
-- Action clip video records short clips around browser actions and stitches them
-  into `video.webm` when `ffmpeg` is available.
+- Journey video records one `video.webm` per journey run when video is enabled.
 - Dashboard bookmarks come from UI actions and can be post-processed by the Pi
   bookmark curator unless disabled.
 - Suite runs write a run-level dashboard and `history.json` summary.

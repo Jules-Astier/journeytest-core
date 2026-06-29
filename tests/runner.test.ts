@@ -269,34 +269,20 @@ class HangingDirector implements AgentDirector {
   }
 }
 
-class ActionClipDirector implements AgentDirector {
-  readonly name = "action-clip";
-  readonly model = { provider: "test", name: "action-clip" };
+class RecordingDirector implements AgentDirector {
+  readonly name = "recording";
+  readonly model = { provider: "test", name: "recording" };
 
   async run(context: DirectorRunContext): Promise<AgentVerdict> {
-    if (!context.actionVideoRecorder) {
-      throw new Error("Expected action video recorder.");
-    }
+    const clickResult = await context.browser.click("@e1");
+    await context.recorder.record("browser.click", clickResult.summary, {
+      target: "@e1",
+    });
 
-    await context.actionVideoRecorder.record(
-      { actionKind: "click", target: "@e1" },
-      async () => {
-        const result = await context.browser.click("@e1");
-        await context.recorder.record("browser.click", result.summary, {
-          target: "@e1",
-        });
-      },
-    );
-
-    await context.actionVideoRecorder.record(
-      { actionKind: "press", target: "Enter" },
-      async () => {
-        const result = await context.browser.press("Enter");
-        await context.recorder.record("browser.press", result.summary, {
-          key: "Enter",
-        });
-      },
-    );
+    const pressResult = await context.browser.press("Enter");
+    await context.recorder.record("browser.press", pressResult.summary, {
+      key: "Enter",
+    });
 
     return {
       status: "passed",
@@ -592,7 +578,7 @@ describe("runJourney", () => {
     );
   });
 
-  it("records action-scoped video clips", async () => {
+  it("records one journey-scoped video", async () => {
     const outputDir = await mkdtemp(join(tmpdir(), "journeytest-clips-"));
     const journey = UserJourneySchema.parse(
       JSON.parse(await readFile("examples/journeys/admin-invite-user.json", "utf8")),
@@ -607,18 +593,15 @@ describe("runJourney", () => {
       profile,
       outputDir,
       driver,
-      director: new ActionClipDirector(),
+      director: new RecordingDirector(),
       video: true,
     });
 
     expect(result.runStatus).toBe("completed");
-    expect(result.artifacts.videoClips).toHaveLength(2);
-    expect(result.artifacts.video).toBeUndefined();
-    expect(result.videoProcessing).toMatchObject({
-      mode: "action-clips",
-      actionClipCount: 2,
-      actionClipStitched: false,
-    });
+    expect(result.artifacts.videoClips).toHaveLength(0);
+    expect(result.artifacts.video).toBeDefined();
+    expect(result.timeline.some((event) => event.type === "video.started")).toBe(true);
+    expect(result.timeline.some((event) => event.type === "video.stopped")).toBe(true);
     const click = result.timeline.find((event) => event.type === "browser.click");
     const press = result.timeline.find((event) => event.type === "browser.press");
     expect(click?.videoTimeMs).toBeGreaterThanOrEqual(0);

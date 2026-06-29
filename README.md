@@ -366,7 +366,7 @@ npx journeytest run examples/journeys \
 
 With the default `agent-browser` driver, parallel journeys share one headless browser session and each journey gets its own labeled tab. This keeps parallel runs from launching one Chrome-for-Testing app per agent. Browser commands are safely serialized around tab switching, while Pi directors can still run concurrently.
 
-Tabs in a shared browser session share cookies, storage, cache, and history. `agent-browser` also supports one active video recording per session, so JourneyTest records short action clips by default and stitches them into the dashboard video after the run. This keeps shared-tab video serialization limited to the brief windows around clicks, fills, typing, key presses, hovers, drags, and uploads. For full browser-session isolation, or fully concurrent per-journey video recording, use:
+Tabs in a shared browser session share cookies, storage, cache, and history. `agent-browser` also supports one active video recording per session, so JourneyTest serializes shared-tab video recording per journey and writes one `video.webm` for each journey run. For full browser-session isolation, or fully concurrent per-journey video recording, use:
 
 ```bash
 npx journeytest run examples/journeys \
@@ -380,7 +380,7 @@ npx journeytest run examples/journeys \
 
 In isolated-session mode, each journey gets its own Pi director, browser driver, run directory, and browser session. If you do not pass `--session`, JourneyTest uses the generated run id as the session name. If you pass `--session` with `--parallel-agents > 1`, the value is treated as a session prefix and each journey receives a unique derived browser session name.
 
-JourneyTest records only the short evidence windows around browser actions, then stitches those clips into `video.webm` so dashboard bookmarks still seek through one condensed video. Use `--no-video` to skip video entirely.
+JourneyTest records one journey-scoped `video.webm` by default. Dashboard bookmarks still seek to the relevant action timestamps in that video. Use `--no-video` to skip video entirely.
 
 Use `--retries <count>` to retry failing journeys. The final `run.json` keeps per-attempt metadata and marks journeys as flaky when they pass only after one or more failed attempts.
 
@@ -446,7 +446,7 @@ The browser tool surface also supports targeted container scrolling, hover, drag
 
 ## Video Chapters
 
-Recorded videos get timestamped bookmarks from UI actions only, such as clicks, fills, typing, pressing keys, drags, uploads, and hovers. Snapshot captures, screenshots, tool start/end events, and assistant-message events are not turned into bookmarks. In action-clip mode, bookmark timestamps refer to the stitched condensed video rather than the original wall-clock journey time.
+Recorded videos get timestamped bookmarks from UI actions only, such as clicks, fills, typing, pressing keys, drags, uploads, and hovers. Snapshot captures, screenshots, tool start/end events, and assistant-message events are not turned into bookmarks. Bookmark timestamps refer to elapsed time within the journey recording.
 
 By default, the CLI runs a post-run Pi bookmark curator using the same `--provider` and `--model`. The curator receives the action timeline plus nearby assistant text and can remove noisy action bookmarks or relabel them as concise chapter-style labels such as `Submit invite form`.
 
@@ -613,9 +613,9 @@ For `http` environments, `function` is an endpoint path under `url` unless it is
 
 Use `--keep-data` to skip cleanup while debugging. Convex HTTP transport requires the app project to expose test-gated public functions. Convex CLI transport uses `npx convex run` from `projectDir` and can target internal functions when the environment declares that capability.
 
-## Action Clip Video
+## Journey Video
 
-When video recording is enabled, JourneyTest records around browser actions such as clicks, fills, typing, key presses, hovers, drags, and uploads. Each action clip is saved under `video-clips/`, then the clips are stitched into `video.webm` when `ffmpeg` is available. The dashboard uses the stitched video, so action bookmarks seek to the relevant condensed timestamp without preserving model-thinking dead air.
+When video recording is enabled, JourneyTest starts recording after the browser driver starts and stops recording before the driver closes. The run writes one journey-scoped `video.webm`, and action bookmarks seek to timestamps within that recording.
 
 ## Verdict Ownership
 
