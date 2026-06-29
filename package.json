@@ -12,9 +12,10 @@
   "bugs": {
     "url": "https://github.com/Jules-Astier/journeytest-core/issues"
   },
-  "homepage": "https://github.com/Jules-Astier/journeytest-core#readme",
+  "homepage": "https://jules-astier.github.io/journeytest-core/",
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   },
   "bin": {
     "journeytest": "dist/cli.js"
@@ -38,6 +39,7 @@
     "src",
     "skills",
     "examples",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE",
     "SECURITY.md"
@@ -53,8 +55,13 @@
     "test:agent-browser": "vitest run tests/agentBrowserUiChange.test.ts --reporter=verbose --testTimeout=10000",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
     "validate": "npm run typecheck && npm test",
     "release:check": "npm run validate && npm pack --dry-run",
+    "release": "semantic-release",
+    "release:dry-run": "semantic-release --dry-run --no-ci",
     "prepublishOnly": "npm run validate",
     "prepack": "npm run clean && npm run build"
   },
@@ -84,9 +91,21 @@
     }
   },
   "devDependencies": {
+    "@commitlint/cli": "^21.1.0",
+    "@commitlint/config-conventional": "^21.1.0",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/exec": "^7.1.0",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^12.0.8",
+    "@semantic-release/npm": "^13.1.5",
+    "@semantic-release/release-notes-generator": "^14.1.1",
     "@types/node": "25.9.3",
+    "conventional-changelog-conventionalcommits": "^10.2.0",
+    "semantic-release": "^25.0.5",
     "tsx": "4.22.4",
     "typescript": "6.0.3",
+    "vitepress": "^1.6.4",
     "vitest": "4.1.9"
   },
   "engines": {

@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -26,27 +28,50 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Check semantic commits
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            from="${{ github.event.pull_request.base.sha }}"
+            to="${{ github.event.pull_request.head.sha }}"
+          elif [[ "${{ github.event.before }}" =~ ^0+$ ]]; then
+            echo "No previous commit is available for this push; skipping commitlint."
+            exit 0
+          else
+            from="${{ github.event.before }}"
+            to="${{ github.sha }}"
+          fi
+
+          npx commitlint --from "$from" --to "$to" --verbose
+
       - name: Validate
         run: npm run validate
 
       - name: Check package contents
         run: npm pack --dry-run
 
-  publish:
-    name: Publish to npm
+  release:
+    name: Semantic release
     needs: validate
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: npm publish
     permissions:
-      contents: read
+      contents: write
+      issues: write
+      pull-requests: write
       id-token: write
     env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js for npm
         uses: actions/setup-node@v6
@@ -60,33 +85,5 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Configure npm token
-        if: env.NPM_TOKEN != ''
-        run: npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
-
-      - name: Check whether this version is already published
-        id: package
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          package_name="$(node -p "require('./package.json').name")"
-          package_version="$(node -p "require('./package.json').version")"
-
-          echo "name=${package_name}" >> "$GITHUB_OUTPUT"
-          echo "version=${package_version}" >> "$GITHUB_OUTPUT"
-
-          if npm view "${package_name}@${package_version}" version --json > npm-view.json 2> npm-view.err; then
-            echo "published=true" >> "$GITHUB_OUTPUT"
-            echo "Package ${package_name}@${package_version} is already published; skipping npm publish." >> "$GITHUB_STEP_SUMMARY"
-          elif grep -q "E404" npm-view.err; then
-            echo "published=false" >> "$GITHUB_OUTPUT"
-            echo "Package ${package_name}@${package_version} is not published yet; publishing to npm." >> "$GITHUB_STEP_SUMMARY"
-          else
-            cat npm-view.err >&2
-            exit 1
-          fi
-
-      - name: Publish package
-        if: steps.package.outputs.published == 'false'
-        run: npm publish --provenance --access public
+      - name: Release
+        run: npm run release

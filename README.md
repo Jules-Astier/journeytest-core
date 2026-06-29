@@ -12,6 +12,22 @@ AI-agent-directed user journey testing for web apps.
 
 The first director implementation uses Pi Agent SDK. The first browser implementation uses the `agent-browser` CLI.
 
+## Documentation
+
+Durable project documentation lives in the OKF-style bundle under [`docs/`](docs/index.md)
+and is published with VitePress to GitHub Pages:
+
+https://jules-astier.github.io/journeytest-core/
+
+Update the relevant docs whenever public behavior, schemas, generated artifacts,
+extension points, examples, or workflows change.
+
+Run the docs site locally with:
+
+```bash
+npm run docs:dev
+```
+
 ## Install
 
 ```bash
@@ -23,6 +39,50 @@ JourneyTest runs on Node.js 24 or newer. The default browser driver shells out
 to the `agent-browser` CLI, so install `agent-browser` in the project that runs
 journeys or make the `agent-browser` executable available on `PATH`.
 
+## Agent Skills
+
+JourneyTest includes the `journeytest-author` agent skill for writing and
+reviewing tester profiles, journey JSON, and data lifecycle setup.
+
+Install it from this GitHub repository with Vercel's `skills` CLI:
+
+```bash
+npx skills add Jules-Astier/journeytest-core --skill journeytest-author
+```
+
+`skills add` installs project-local skills by default. To target Codex
+explicitly, run:
+
+```bash
+npx skills add Jules-Astier/journeytest-core \
+  --skill journeytest-author \
+  --agent codex
+```
+
+Preview the skills exposed by the repository without installing anything:
+
+```bash
+npx skills add Jules-Astier/journeytest-core --list
+```
+
+If `@baguette-studios/journeytest-core` is already installed in a project, you
+can also sync the bundled skill files from `node_modules`:
+
+```bash
+npx skills experimental_sync --agent codex
+```
+
+The `experimental_sync` command is currently experimental in the `skills` CLI,
+but it works because JourneyTest publishes its `skills/` directory. It creates
+or updates project-local agent skill directories such as `.agents/skills/` and
+writes `skills-lock.json`.
+
+JourneyTest does not run an interactive `postinstall` prompt. npm install
+scripts run in CI and other non-interactive environments, can be disabled by
+package managers, and cannot reliably choose which local agent directory should
+receive the skill. Use the explicit commands above instead, or add `--global`
+when you intentionally want a user-wide skill install.
+
 For local development:
 
 ```bash
@@ -32,15 +92,39 @@ npm run build
 
 ## Release Automation
 
-Pushes to `main` run the CI/CD workflow. The `validate` job runs type checks,
-tests, and `npm pack --dry-run`; if that passes, the `publish` job checks the
-`package.json` version against npm and publishes only when that exact version is
-not already present.
+Pushes to `main` run the CI/CD workflow. The `validate` job checks Conventional
+Commit messages, runs type checks and tests, and verifies package contents with
+`npm pack --dry-run`.
 
-Publishing uses `npm publish --provenance --access public`. Configure npm
-Trusted Publishing for `Jules-Astier/journeytest-core` and
+If validation passes, semantic-release reads commits since the last `v*` tag,
+calculates the next SemVer version, generates `CHANGELOG.md` and GitHub release
+notes, commits release metadata, tags the release, publishes to npm, and creates
+the GitHub release.
+
+Release bump rules:
+
+- `feat`: minor release
+- `fix` or `perf`: patch release
+- `type!` or `BREAKING CHANGE:` footer: major release
+- `docs`, `refactor`, `test`, `build`, `ci`, `chore`, and `revert`: release
+  note entries when included with a release, but no release by themselves unless
+  breaking
+
+Configure npm Trusted Publishing for `Jules-Astier/journeytest-core` and
 `.github/workflows/ci.yml`, or add a GitHub Actions repository secret named
-`NPM_TOKEN` with npm publish permission.
+`NPM_TOKEN` with npm publish permission. The package sets
+`publishConfig.provenance` so npm publishes with provenance where supported.
+
+This repository currently needs one bootstrap tag before the first automated
+release run:
+
+```bash
+git tag v0.1.1 6cbb66d
+git push origin v0.1.1
+```
+
+After that, semantic-release owns release commits, changelog updates, tags, and
+npm publishing.
 
 ## Validate Examples
 
