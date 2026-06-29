@@ -30,6 +30,18 @@ npm install
 npm run build
 ```
 
+## Release Automation
+
+Pushes to `main` run the CI/CD workflow. The `validate` job runs type checks,
+tests, and `npm pack --dry-run`; if that passes, the `publish` job checks the
+`package.json` version against npm and publishes only when that exact version is
+not already present.
+
+Publishing uses `npm publish --provenance --access public`. Configure npm
+Trusted Publishing for `Jules-Astier/journeytest-core` and
+`.github/workflows/ci.yml`, or add a GitHub Actions repository secret named
+`NPM_TOKEN` with npm publish permission.
+
 ## Validate Examples
 
 ```bash

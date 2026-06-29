@@ -1,10 +1,13 @@
-name: CI
+name: CI/CD
 
 on:
   pull_request:
   push:
     branches:
       - main
+
+permissions:
+  contents: read
 
 jobs:
   validate:
@@ -28,3 +31,57 @@ jobs:
 
       - name: Check package contents
         run: npm pack --dry-run
+
+  publish:
+    name: Publish to npm
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js for npm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Install latest npm
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check whether this version is already published
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package_name="$(node -p "require('./package.json').name")"
+          package_version="$(node -p "require('./package.json').version")"
+
+          echo "name=${package_name}" >> "$GITHUB_OUTPUT"
+          echo "version=${package_version}" >> "$GITHUB_OUTPUT"
+
+          if npm view "${package_name}@${package_version}" version --json > npm-view.json 2> npm-view.err; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "Package ${package_name}@${package_version} is already published; skipping npm publish." >> "$GITHUB_STEP_SUMMARY"
+          elif grep -q "E404" npm-view.err; then
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "Package ${package_name}@${package_version} is not published yet; publishing to npm." >> "$GITHUB_STEP_SUMMARY"
+          else
+            cat npm-view.err >&2
+            exit 1
+          fi
+
+      - name: Publish package
+        if: steps.package.outputs.published == 'false'
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
