@@ -37,6 +37,7 @@ jobs:
     needs: validate
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment: npm publish
     permissions:
       contents: read
       id-token: write
