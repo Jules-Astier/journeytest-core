@@ -66,7 +66,11 @@ import {
 } from "./reporters/suiteDashboard.js";
 import { runJourney, type RunJourneyOptions } from "./runner/runJourney.js";
 import { isoTimestampForPath, sanitizePathSegment } from "./utils/path.js";
-import { DataLifecycleController } from "./lifecycle/index.js";
+import {
+  AppLifecycleController,
+  applyAppTargetOverride,
+  DataLifecycleController,
+} from "./lifecycle/index.js";
 import {
   createDefaultJourneyTestFactoryRegistry,
   type JourneyTestFactoryRegistry,
@@ -517,6 +521,11 @@ export async function runCli(
       "Retry each journey up to this many times after a failing attempt.",
       "0",
     )
+    .option(
+      "--journey-timeout-ms <ms>",
+      "Maximum wall-clock time for one journey director run before it is aborted.",
+      "1800000",
+    )
     .option("--no-video", "Disable video recording.")
     .option(
       "--no-ui-change-recording",
@@ -562,14 +571,6 @@ export async function runCli(
     .option(
       "--bookmark-system-prompt <path>",
       "Path to a custom system prompt for bookmark curation.",
-    )
-    .option(
-      "--no-trim-solid-video",
-      "Disable trimming a leading solid-color section from recorded videos.",
-    )
-    .option(
-      "--no-condense-static-video",
-      "Disable removing long static sections from recorded videos.",
     )
     .option(
       "--data-lifecycle <path>",
@@ -641,6 +642,7 @@ export async function runCli(
           viewport?: string;
           device?: string;
           retries: string;
+          journeyTimeoutMs: string;
           parallelAgents: string;
           parallelBrowserMode: string;
           video?: boolean;
@@ -655,8 +657,6 @@ export async function runCli(
           curateBookmarks?: boolean;
           bookmarkCurator: string;
           bookmarkSystemPrompt?: string;
-          trimSolidVideo?: boolean;
-          condenseStaticVideo?: boolean;
           dataLifecycle?: string;
           dataLifecycleProvider: string;
           keepData?: boolean;
@@ -721,6 +721,9 @@ export async function runCli(
 
         const parallelAgents = parseParallelAgents(options.parallelAgents);
         const retries = parseRetries(options.retries);
+        const journeyTimeoutMs = parseJourneyTimeoutMs(
+          options.journeyTimeoutMs,
+        );
         const parallelBrowserMode = parseParallelBrowserMode(
           options.parallelBrowserMode,
         );
@@ -821,7 +824,7 @@ export async function runCli(
             console.log(`Shared browser session: ${sharedBrowserSessionName}`);
             if (options.video ?? true) {
               console.log(
-                "Shared-tab video recording is serialized per journey because agent-browser supports one active recording per session.",
+                "Shared-tab video recording is serialized only around action clips because agent-browser supports one active recording per session.",
               );
             }
           }
@@ -851,6 +854,9 @@ export async function runCli(
           console.log(`Browser session prefix: ${options.session}`);
         }
 
+        let appLifecycleController: AppLifecycleController | undefined;
+        let removeAppLifecycleSignalHandlers: (() => void) | undefined;
+        let runtimeItems = items;
         let suiteLifecycleController: DataLifecycleController | undefined;
         let suiteLifecycleBlocked = false;
         let suiteRuns: Array<{
@@ -859,6 +865,39 @@ export async function runCli(
         }> = [];
 
         try {
+          if (dataLifecycleConfig?.appLifecycle) {
+            appLifecycleController = await AppLifecycleController.create({
+              config: dataLifecycleConfig.appLifecycle,
+              suiteRunId,
+              runDir: join(runOutputDir, "_app-lifecycle"),
+            });
+            removeAppLifecycleSignalHandlers =
+              installAppLifecycleSignalCleanup(appLifecycleController);
+
+            console.log("");
+            console.log("Running app lifecycle start");
+            await appLifecycleController.runStart();
+            console.log(
+              `App lifecycle: ${appLifecycleController.result.status}`,
+            );
+            console.log(
+              `App lifecycle artifacts: ${join(runOutputDir, "_app-lifecycle")}`,
+            );
+
+            if (appLifecycleController.appTarget) {
+              runtimeItems = items.map((item) => ({
+                ...item,
+                journey: applyAppTargetOverride(
+                  item.journey,
+                  appLifecycleController?.appTarget,
+                ),
+              }));
+              console.log(
+                `App target: ${appLifecycleController.appTarget.baseUrl}`,
+              );
+            }
+          }
+
           if (dataLifecycleConfig?.suiteLifecycle && dataLifecycleProvider) {
             suiteLifecycleController = new DataLifecycleController({
               definition: dataLifecycleConfig.suiteLifecycle,
@@ -889,12 +928,12 @@ export async function runCli(
 
           if (!suiteLifecycleBlocked) {
             suiteRuns = await mapConcurrent(
-              items,
+              runtimeItems,
               parallelAgents,
               async (item, index) => {
                 console.log("");
                 console.log(
-                  `Running ${item.journey.id} (${index + 1}/${items.length})`,
+                  `Running ${item.journey.id} (${index + 1}/${runtimeItems.length})`,
                 );
                 console.log(`Source: ${item.journeyFile}`);
 
@@ -913,8 +952,9 @@ export async function runCli(
                     factories.bookmarkCurators.create(
                       bookmarkCuratorName,
                       bookmarkCuratorFactoryContext,
-                    ),
+                  ),
                   video: options.video,
+                  directorTimeoutMs: journeyTimeoutMs,
                   uiChangeRecording: options.uiChangeRecording,
                   uiChangeRecordingOptions,
                   sessionName: browserSessionNameForRun({
@@ -937,8 +977,6 @@ export async function runCli(
                     item.journey.browserEnvironment,
                     browserEnvironmentOverrides,
                   ),
-                  trimSolidColorVideoStart: options.trimSolidVideo,
-                  condenseStaticVideo: options.condenseStaticVideo,
                   ...(dataLifecycleConfig && dataLifecycleProvider
                     ? {
                         dataLifecycle: {
@@ -982,6 +1020,22 @@ export async function runCli(
             ) {
               process.exitCode = 1;
             }
+          }
+          if (appLifecycleController) {
+            await appLifecycleController.runCleanup();
+            console.log("");
+            console.log(
+              `App lifecycle: ${appLifecycleController.result.status}`,
+            );
+            console.log(
+              `App lifecycle artifacts: ${join(runOutputDir, "_app-lifecycle")}`,
+            );
+            if (appLifecycleController.result.status === "failed") {
+              process.exitCode = 1;
+            }
+          }
+          if (removeAppLifecycleSignalHandlers) {
+            removeAppLifecycleSignalHandlers();
           }
         }
 
@@ -1507,6 +1561,13 @@ export function buildUiChangeRecordingOptions(options: {
     : undefined;
 }
 
+export function parseJourneyTimeoutMs(value: string): number | undefined {
+  if (value === "0") {
+    return undefined;
+  }
+  return parsePositiveIntegerOption("--journey-timeout-ms", value);
+}
+
 function parsePositiveIntegerOption(name: string, value: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) {
@@ -1615,6 +1676,7 @@ interface RunJourneyWithRetriesOptions {
   createDirector: () => AgentDirector;
   createBookmarkCurator: () => BookmarkCurator | undefined;
   video?: boolean;
+  directorTimeoutMs?: number;
   uiChangeRecording?: boolean;
   uiChangeRecordingOptions?: UiChangeRecordingOptions;
   sessionName?: string;
@@ -1622,8 +1684,6 @@ interface RunJourneyWithRetriesOptions {
   statePath?: string;
   headed?: boolean;
   browserEnvironment?: BrowserEnvironment;
-  trimSolidColorVideoStart?: boolean;
-  condenseStaticVideo?: boolean;
   dataLifecycle?: RunJourneyOptions["dataLifecycle"];
 }
 
@@ -1648,6 +1708,7 @@ async function runJourneyWithRetries(
       director: options.createDirector(),
       outputDir: options.outputDir,
       video: options.video,
+      directorTimeoutMs: options.directorTimeoutMs,
       uiChangeRecording: options.uiChangeRecording,
       uiChangeRecordingOptions: options.uiChangeRecordingOptions,
       sessionName: attemptScopedValue(options.sessionName, attempt),
@@ -1656,8 +1717,6 @@ async function runJourneyWithRetries(
       headed: options.headed,
       browserEnvironment: options.browserEnvironment,
       bookmarkCurator: options.createBookmarkCurator(),
-      trimSolidColorVideoStart: options.trimSolidColorVideoStart,
-      condenseStaticVideo: options.condenseStaticVideo,
       dataLifecycle: options.dataLifecycle,
     });
 
@@ -2464,6 +2523,35 @@ async function writeCliCiOutputs(options: {
   if (options.githubAnnotations) {
     emitGitHubAnnotations(options.suiteRuns, process.stderr);
   }
+}
+
+function installAppLifecycleSignalCleanup(
+  controller: AppLifecycleController,
+): () => void {
+  const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
+  let handling = false;
+  const handler = async (signal: NodeJS.Signals) => {
+    if (handling) {
+      return;
+    }
+    handling = true;
+    console.error(`Received ${signal}; running app lifecycle cleanup.`);
+    await controller.runCleanup().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`App lifecycle cleanup failed: ${message}`);
+    });
+    process.exit(signal === "SIGINT" ? 130 : 143);
+  };
+
+  for (const signal of signals) {
+    process.once(signal, handler);
+  }
+
+  return () => {
+    for (const signal of signals) {
+      process.off(signal, handler);
+    }
+  };
 }
 
 function printRunResult(result: Awaited<ReturnType<typeof runJourney>>): void {

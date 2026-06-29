@@ -20,6 +20,10 @@ export class EventRecorder {
     return [...this.events];
   }
 
+  get eventCount(): number {
+    return this.events.length;
+  }
+
   startVideoClock(): void {
     this.videoStartedAtMs = Date.now();
   }
@@ -36,6 +40,18 @@ export class EventRecorder {
     for (const event of this.events) {
       if (event.videoTimeMs !== undefined) {
         event.videoTimeMs = Math.max(0, event.videoTimeMs - offsetMs);
+      }
+    }
+  }
+
+  offsetVideoTimeMsSince(eventIndex: number, offsetMs: number): void {
+    if (offsetMs <= 0) {
+      return;
+    }
+
+    for (const event of this.events.slice(eventIndex)) {
+      if (event.videoTimeMs !== undefined) {
+        event.videoTimeMs += offsetMs;
       }
     }
   }

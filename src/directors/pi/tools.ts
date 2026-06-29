@@ -17,6 +17,7 @@ import { truncateText } from "../../utils/text.js";
 import {
   formatUiChangeToolSuffix,
   runWithUiChangeRecording,
+  type UiChangeRecordingResult,
 } from "../uiChangeRecording.js";
 
 const EvidenceReferenceType = Type.Object({
@@ -229,7 +230,7 @@ export function createPiBrowserTools(
       execute: async (_toolCallId, rawParams) => {
         const params = rawParams as Static<typeof browserClickParams>;
         let clickContext: Record<string, unknown> = {};
-        const observed = await runWithUiChangeRecording(
+        const observed = await runRecordedUiAction(
           context,
           {
             index: ++uiActionCount,
@@ -300,7 +301,7 @@ export function createPiBrowserTools(
       executionMode: "sequential",
       execute: async (_toolCallId, rawParams) => {
         const params = rawParams as Static<typeof browserHoverParams>;
-        const observed = await runWithUiChangeRecording(
+        const observed = await runRecordedUiAction(
           context,
           {
             index: ++uiActionCount,
@@ -328,7 +329,7 @@ export function createPiBrowserTools(
       executionMode: "sequential",
       execute: async (_toolCallId, rawParams) => {
         const params = rawParams as Static<typeof browserDragParams>;
-        const observed = await runWithUiChangeRecording(
+        const observed = await runRecordedUiAction(
           context,
           {
             index: ++uiActionCount,
@@ -359,7 +360,7 @@ export function createPiBrowserTools(
       executionMode: "sequential",
       execute: async (_toolCallId, rawParams) => {
         const params = rawParams as Static<typeof browserUploadParams>;
-        const observed = await runWithUiChangeRecording(
+        const observed = await runRecordedUiAction(
           context,
           {
             index: ++uiActionCount,
@@ -393,7 +394,7 @@ export function createPiBrowserTools(
       executionMode: "sequential",
       execute: async (_toolCallId, rawParams) => {
         const params = rawParams as Static<typeof browserFillParams>;
-        const observed = await runWithUiChangeRecording(
+        const observed = await runRecordedUiAction(
           context,
           {
             index: ++uiActionCount,
@@ -426,7 +427,7 @@ export function createPiBrowserTools(
       executionMode: "sequential",
       execute: async (_toolCallId, rawParams) => {
         const params = rawParams as Static<typeof browserTypeParams>;
-        const observed = await runWithUiChangeRecording(
+        const observed = await runRecordedUiAction(
           context,
           {
             index: ++uiActionCount,
@@ -460,7 +461,7 @@ export function createPiBrowserTools(
       executionMode: "sequential",
       execute: async (_toolCallId, rawParams) => {
         const params = rawParams as Static<typeof browserPressParams>;
-        const observed = await runWithUiChangeRecording(
+        const observed = await runRecordedUiAction(
           context,
           {
             index: ++uiActionCount,
@@ -733,6 +734,29 @@ export function createPiBrowserTools(
       },
     },
   ];
+}
+
+function runRecordedUiAction<T>(
+  context: DirectorRunContext,
+  action: {
+    index: number;
+    actionKind: string;
+    target?: string;
+  },
+  execute: () => Promise<T>,
+): Promise<UiChangeRecordingResult<T>> {
+  const observed = () => runWithUiChangeRecording(context, action, execute);
+  if (!context.actionVideoRecorder) {
+    return observed();
+  }
+
+  return context.actionVideoRecorder.record(
+    {
+      actionKind: action.actionKind,
+      target: action.target,
+    },
+    observed,
+  );
 }
 
 async function captureClickContext(

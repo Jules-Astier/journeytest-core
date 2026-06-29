@@ -1,5 +1,6 @@
 import type { BrowserDriver } from "../drivers/types.js";
 import type { EventRecorder } from "../runner/events.js";
+import type { ActionVideoClip } from "../video/clips.js";
 import type {
   AgentVerdict,
   TesterProfile,
@@ -20,6 +21,17 @@ export interface DirectorArtifacts {
   uiChangesDir: string;
 }
 
+export interface ActionVideoRecorder {
+  record<T>(
+    action: {
+      actionKind: string;
+      target?: string;
+    },
+    execute: () => Promise<T>,
+  ): Promise<T>;
+  clips(): ActionVideoClip[];
+}
+
 export interface UiChangeRecordingOptions {
   timeoutMs?: number;
   quietMs?: number;
@@ -38,6 +50,8 @@ export interface DirectorRunContext {
   browser: BrowserDriver;
   recorder: EventRecorder;
   artifacts: DirectorArtifacts;
+  signal?: AbortSignal;
+  actionVideoRecorder?: ActionVideoRecorder;
   uiChangeRecording?: boolean;
   uiChangeRecordingOptions?: UiChangeRecordingOptions;
 }

@@ -40,6 +40,7 @@ const networkAccessToken = "network-token-123456";
 class FakeBrowserDriver implements BrowserDriver {
   starts: BrowserStartOptions[] = [];
   recordingPath?: string;
+  closed = false;
   consoleCaptures: ConsoleCaptureOptions[] = [];
   networkCaptures: NetworkCaptureOptions[] = [];
   networkRecordingStarted = false;
@@ -173,7 +174,9 @@ class FakeBrowserDriver implements BrowserDriver {
     return "Users";
   }
 
-  async close(): Promise<void> {}
+  async close(): Promise<void> {
+    this.closed = true;
+  }
 }
 
 class ScriptedDirector implements AgentDirector {
@@ -248,6 +251,87 @@ class ScriptedDirector implements AgentDirector {
           recommendation: "Keep the invitation status in the users table.",
         },
       ],
+    };
+  }
+}
+
+class HangingDirector implements AgentDirector {
+  readonly name = "hanging";
+  readonly model = { provider: "test", name: "hanging" };
+
+  async run(context: DirectorRunContext): Promise<AgentVerdict> {
+    await new Promise<void>((resolve) => {
+      context.signal?.addEventListener("abort", () => resolve(), {
+        once: true,
+      });
+    });
+    await new Promise<never>(() => undefined);
+  }
+}
+
+class ActionClipDirector implements AgentDirector {
+  readonly name = "action-clip";
+  readonly model = { provider: "test", name: "action-clip" };
+
+  async run(context: DirectorRunContext): Promise<AgentVerdict> {
+    if (!context.actionVideoRecorder) {
+      throw new Error("Expected action video recorder.");
+    }
+
+    await context.actionVideoRecorder.record(
+      { actionKind: "click", target: "@e1" },
+      async () => {
+        const result = await context.browser.click("@e1");
+        await context.recorder.record("browser.click", result.summary, {
+          target: "@e1",
+        });
+      },
+    );
+
+    await context.actionVideoRecorder.record(
+      { actionKind: "press", target: "Enter" },
+      async () => {
+        const result = await context.browser.press("Enter");
+        await context.recorder.record("browser.press", result.summary, {
+          key: "Enter",
+        });
+      },
+    );
+
+    return {
+      status: "passed",
+      confidence: "high",
+      summary: "Action clips were recorded.",
+      criteria: [
+        {
+          id: "invite-confirmed",
+          result: "met",
+          explanation: "The scripted action completed.",
+          evidence: {
+            videoTimeMs: 0,
+            screenshot: "scripted-action-clip.png",
+            observation: "The scripted action completed.",
+          },
+        },
+        {
+          id: "cannot-find-user-management",
+          result: "not-met",
+          explanation: "User management was reachable.",
+        },
+        {
+          id: "invite-not-confirmed",
+          result: "not-met",
+          explanation: "A clear confirmation was observed.",
+        },
+        {
+          id: "auth-blocked",
+          result: "not-met",
+          explanation: "Authentication did not block the flow.",
+        },
+      ],
+      blockers: [],
+      uxFindings: [],
+      suggestedImprovements: [],
     };
   }
 }
@@ -448,7 +532,6 @@ describe("runJourney", () => {
       video: true,
       sessionName: "test-session",
       bookmarkCurator: new ScriptedBookmarkCurator(),
-      trimSolidColorVideoStart: false,
     });
 
     expect(result.runStatus).toBe("completed");
@@ -466,7 +549,6 @@ describe("runJourney", () => {
 
     const dashboard = await readFile(result.artifacts.dashboard, "utf8");
     expect(dashboard).toContain("JourneyTest");
-    expect(dashboard).toContain("<video");
     expect(dashboard).toContain("data-seek-ms=\"0\"");
     expect(dashboard).toContain("<strong>1</strong> marks");
     expect(dashboard).toContain("Submit invite form");
@@ -478,6 +560,69 @@ describe("runJourney", () => {
     const events = await readFile(result.artifacts.events, "utf8");
     expect(events).toContain("journey.started");
     expect(events).toContain("journey.completed");
+  });
+
+  it("fails and cleans up when the director exceeds the journey timeout", async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), "journeytest-timeout-"));
+    const journey = UserJourneySchema.parse(
+      JSON.parse(await readFile("examples/journeys/admin-invite-user.json", "utf8")),
+    );
+    const profile = TesterProfileSchema.parse(
+      JSON.parse(await readFile("examples/profiles/admin.json", "utf8")),
+    );
+    const driver = new FakeBrowserDriver();
+
+    const result = await runJourney({
+      journey,
+      profile,
+      outputDir,
+      driver,
+      director: new HangingDirector(),
+      video: false,
+      directorTimeoutMs: 20,
+    });
+
+    expect(result.runStatus).toBe("error");
+    expect(result.error?.message).toContain(
+      "Journey director timed out after 20ms.",
+    );
+    expect(driver.closed).toBe(true);
+    expect(result.timeline.some((event) => event.type === "journey.error")).toBe(
+      true,
+    );
+  });
+
+  it("records action-scoped video clips", async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), "journeytest-clips-"));
+    const journey = UserJourneySchema.parse(
+      JSON.parse(await readFile("examples/journeys/admin-invite-user.json", "utf8")),
+    );
+    const profile = TesterProfileSchema.parse(
+      JSON.parse(await readFile("examples/profiles/admin.json", "utf8")),
+    );
+    const driver = new FakeBrowserDriver();
+
+    const result = await runJourney({
+      journey,
+      profile,
+      outputDir,
+      driver,
+      director: new ActionClipDirector(),
+      video: true,
+    });
+
+    expect(result.runStatus).toBe("completed");
+    expect(result.artifacts.videoClips).toHaveLength(2);
+    expect(result.artifacts.video).toBeUndefined();
+    expect(result.videoProcessing).toMatchObject({
+      mode: "action-clips",
+      actionClipCount: 2,
+      actionClipStitched: false,
+    });
+    const click = result.timeline.find((event) => event.type === "browser.click");
+    const press = result.timeline.find((event) => event.type === "browser.press");
+    expect(click?.videoTimeMs).toBeGreaterThanOrEqual(0);
+    expect(press?.videoTimeMs).toBeGreaterThanOrEqual(click?.videoTimeMs ?? 0);
   });
 
   it("writes console and network evidence into runner artifacts and reports", async () => {
@@ -502,8 +647,6 @@ describe("runJourney", () => {
       driver,
       director: new ScriptedConsoleNetworkDirector(),
       video: false,
-      trimSolidColorVideoStart: false,
-      condenseStaticVideo: false,
     });
 
     expect(result.runStatus).toBe("completed");
@@ -556,8 +699,6 @@ describe("runJourney", () => {
       driver,
       director: new ScriptedDirector(),
       video: false,
-      trimSolidColorVideoStart: false,
-      condenseStaticVideo: false,
     });
 
     expect(driver.starts[0]?.sessionName).toBe(result.runId);
@@ -613,8 +754,6 @@ describe("runJourney", () => {
       driver: new FakeBrowserDriver(),
       director: new ScriptedDirector(),
       video: false,
-      trimSolidColorVideoStart: false,
-      condenseStaticVideo: false,
       dataLifecycle: {
         environments: {
           "local-convex": {
@@ -713,8 +852,6 @@ describe("runJourney", () => {
       driver,
       director: new ScriptedDirector(),
       video: false,
-      trimSolidColorVideoStart: false,
-      condenseStaticVideo: false,
       dataLifecycle: {
         environments: {
           "local-convex": {

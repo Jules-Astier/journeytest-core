@@ -38,6 +38,7 @@ import {
   formatMissingOAuthCredentialsMessage,
   getOAuthAuthStatus,
   parallelBrowserSessionName,
+  parseJourneyTimeoutMs,
   parseParallelAgents,
   parseParallelBrowserMode,
   resolveAuthPath,
@@ -358,6 +359,14 @@ describe("CLI parallel agents options", () => {
       buildUiChangeRecordingOptions({ uiChangeTimeoutMs: "0" }),
     ).toThrow("--ui-change-timeout-ms");
   });
+
+  it("parses journey timeout options", () => {
+    expect(parseJourneyTimeoutMs("1800000")).toBe(1_800_000);
+    expect(parseJourneyTimeoutMs("0")).toBeUndefined();
+    expect(() => parseJourneyTimeoutMs("-1")).toThrow(
+      "--journey-timeout-ms",
+    );
+  });
 });
 
 describe("CLI auth path resolution", () => {
@@ -588,8 +597,6 @@ describe("CLI factories", () => {
         "--bookmark-curator",
         "dummy",
         "--no-video",
-        "--no-trim-solid-video",
-        "--no-condense-static-video",
       ],
       { factories: registry },
     );
@@ -605,5 +612,101 @@ describe("CLI factories", () => {
     expect(calls.curatorRuns).toBe(1);
     expect(result.model).toEqual({ provider: "dummy", name: "dummy-model" });
     expect(result.bookmarks[0].label).toBe("Dummy bookmark");
+  });
+
+  it("starts app lifecycle services and runs journeys against the resolved target", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const outputDir = await mkdtemp(join(tmpdir(), "journeytest-cli-app-"));
+    const configPath = join(outputDir, "lifecycle.json");
+    const cleanupPath = join(outputDir, "cleanup.json");
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          dataEnvironments: {},
+          appLifecycle: {
+            ports: {
+              frontend: {},
+            },
+            app: {
+              baseUrl: "http://$hosts.frontend:$ports.frontend",
+              allowedOrigins: ["http://$hosts.frontend:$ports.frontend"],
+            },
+            start: {
+              command: process.execPath,
+              commandArgs: ["-e", "console.log(JSON.stringify({ ok: true }))"],
+            },
+            cleanup: {
+              command: process.execPath,
+              commandArgs: [
+                "-e",
+                `const { writeFileSync } = require("node:fs"); const ctx = JSON.parse(process.argv[1]); writeFileSync(${JSON.stringify(cleanupPath)}, JSON.stringify({ phase: ctx.phase, port: ctx.ports.frontend }));`,
+              ],
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    const calls = {
+      browsersCreated: 0,
+      directorRuns: 0,
+      curatorRuns: 0,
+      baseUrls: [] as string[],
+    };
+    const registry: JourneyTestFactoryRegistry =
+      createDefaultJourneyTestFactoryRegistry();
+
+    registry.browserDrivers.register("recording-dummy", () => {
+      calls.browsersCreated++;
+      const driver = new DummyBrowserDriver();
+      const start = driver.start.bind(driver);
+      driver.start = async (options) => {
+        calls.baseUrls.push(options.baseUrl);
+        await start(options);
+      };
+      return driver;
+    });
+    registry.directors.register("dummy", () => new DummyDirector(calls));
+    registry.bookmarkCurators.register(
+      "dummy",
+      () => new DummyBookmarkCurator(calls),
+    );
+
+    await runCli(
+      [
+        "node",
+        "journeytest",
+        "run",
+        "examples/journeys/admin-invite-user.json",
+        "--profile",
+        "examples/profiles/admin.json",
+        "--out",
+        outputDir,
+        "--provider",
+        "dummy",
+        "--model",
+        "dummy-model",
+        "--director",
+        "dummy",
+        "--browser",
+        "recording-dummy",
+        "--bookmark-curator",
+        "dummy",
+        "--data-lifecycle",
+        configPath,
+        "--no-video",
+      ],
+      { factories: registry },
+    );
+
+    expect(process.exitCode).toBeUndefined();
+    expect(calls.baseUrls).toHaveLength(1);
+    expect(calls.baseUrls[0]).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(JSON.parse(await readFile(cleanupPath, "utf8"))).toMatchObject({
+      phase: "cleanup",
+    });
   });
 });

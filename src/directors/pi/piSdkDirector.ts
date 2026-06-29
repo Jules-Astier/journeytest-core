@@ -75,7 +75,16 @@ export class PiSdkDirector implements AgentDirector {
       model: this.model.name,
     });
 
-    await agent.prompt(buildDirectorPrompt(context.journey, context.profile));
+    const abortAgent = () => agent.abort();
+    if (context.signal?.aborted) {
+      abortAgent();
+    }
+    context.signal?.addEventListener("abort", abortAgent, { once: true });
+    try {
+      await agent.prompt(buildDirectorPrompt(context.journey, context.profile));
+    } finally {
+      context.signal?.removeEventListener("abort", abortAgent);
+    }
 
     const verdict =
       finishState.verdict ?? (await createFallbackVerdictFromAgentState(context, agent));

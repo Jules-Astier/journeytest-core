@@ -240,6 +240,53 @@ export const DataLifecycleConfigSchema = z
       DataEnvironmentSchema,
     ),
     suiteLifecycle: DataLifecycleDefinitionSchema.optional(),
+    appLifecycle: z
+      .object({
+        ports: z
+          .record(
+            z.string().min(1).regex(idPattern),
+            z
+              .object({
+                host: z.string().min(1).default("127.0.0.1"),
+              })
+              .strict(),
+          )
+          .optional(),
+        app: z
+          .object({
+            baseUrl: z.string().min(1).optional(),
+            allowedOrigins: z.array(z.string().min(1)).optional(),
+          })
+          .strict()
+          .optional(),
+        start: z
+          .object({
+            command: z.string().min(1),
+            commandArgs: z.array(z.string()).optional(),
+            cwd: z.string().min(1).optional(),
+            env: z.record(z.string().min(1), z.string()).optional(),
+            passContext: z
+              .enum(["json-argv", "json-stdin", "none"])
+              .default("json-argv"),
+            timeoutMs: z.number().int().positive().optional(),
+          })
+          .strict(),
+        cleanup: z
+          .object({
+            command: z.string().min(1),
+            commandArgs: z.array(z.string()).optional(),
+            cwd: z.string().min(1).optional(),
+            env: z.record(z.string().min(1), z.string()).optional(),
+            passContext: z
+              .enum(["json-argv", "json-stdin", "none"])
+              .default("json-argv"),
+            timeoutMs: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -346,6 +393,7 @@ export const RunArtifactsSchema = z
     result: z.string().min(1),
     video: z.string().min(1).optional(),
     videoOriginal: z.string().min(1).optional(),
+    videoClips: z.array(z.string().min(1)).default([]),
     screenshots: z.array(z.string().min(1)).default([]),
     snapshots: z.array(z.string().min(1)).default([]),
     console: z.array(z.string().min(1)).default([]),
@@ -365,8 +413,12 @@ export const RunArtifactsSchema = z
 
 export const VideoProcessingSchema = z
   .object({
-    trimmedSolidColorStart: z.boolean(),
-    trimOffsetMs: z.number().int().nonnegative(),
+    mode: z.literal("action-clips").optional(),
+    actionClipCount: z.number().int().nonnegative().optional(),
+    actionClipStitched: z.boolean().optional(),
+    actionClipStitchReason: z.string().optional(),
+    trimmedSolidColorStart: z.boolean().optional(),
+    trimOffsetMs: z.number().int().nonnegative().optional(),
     originalVideo: z.string().min(1).optional(),
     staticFrameCondensed: z.boolean().optional(),
     staticFrameRemovedMs: z.number().int().nonnegative().optional(),

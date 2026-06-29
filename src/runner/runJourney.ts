@@ -1,9 +1,10 @@
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentDirector } from "../directors/types.js";
+import type { ActionVideoRecorder } from "../directors/types.js";
 import type { UiChangeRecordingOptions } from "../directors/types.js";
 import type { BrowserDriver } from "../drivers/types.js";
-import { buildRawActionBookmarks, isUiActionEvent } from "../core/bookmarks.js";
+import { buildRawActionBookmarks } from "../core/bookmarks.js";
 import {
   type AgentVerdict,
   type BrowserEnvironment,
@@ -31,8 +32,10 @@ import {
   redactSensitiveValue,
   redactTextArtifactContent,
 } from "../utils/redaction.js";
-import { condenseStaticFrameVideo } from "../video/static.js";
-import { trimLeadingSolidColorStart } from "../video/trim.js";
+import {
+  stitchVideoClips,
+  type ActionVideoClip,
+} from "../video/clips.js";
 import { EventRecorder } from "./events.js";
 import {
   DataLifecycleBlockedError,
@@ -55,8 +58,7 @@ export interface RunJourneyOptions {
   uiChangeRecording?: boolean;
   uiChangeRecordingOptions?: UiChangeRecordingOptions;
   bookmarkCurator?: BookmarkCurator;
-  trimSolidColorVideoStart?: boolean;
-  condenseStaticVideo?: boolean;
+  directorTimeoutMs?: number;
   dataLifecycle?: {
     environments: Record<string, DataEnvironment>;
     provider: DataLifecycleProvider;
@@ -86,6 +88,7 @@ export async function runJourney(
   const reportPath = join(runDir, "report.md");
   const resultPath = join(runDir, "run.json");
   const videoPath = join(runDir, "video.webm");
+  const videoClipsDir = join(runDir, "video-clips");
   const screenshotsDir = join(runDir, "screenshots");
   const snapshotsDir = join(runDir, "snapshots");
   const consoleDir = join(runDir, "console");
@@ -103,12 +106,12 @@ export async function runJourney(
 
   let verdict: AgentVerdict | undefined;
   let error: Error | undefined;
-  let recordingStarted = false;
+  let videoArtifactWritten = false;
   let driverStarted = false;
   let driverClosed = false;
   let lifecycleBlocked = false;
   let videoProcessing: VideoProcessing | undefined;
-  let videoOriginalPath: string | undefined;
+  let actionVideoRecorder: ActionClipRecorder | undefined;
   let dataLifecycle: RunResult["dataLifecycle"];
   let dataLifecycleController: DataLifecycleController | undefined;
 
@@ -181,29 +184,33 @@ export async function runJourney(
 
     try {
       if (options.video ?? true) {
-        await options.driver.startRecording(videoPath);
-        recordingStarted = true;
-        recorder.startVideoClock();
-        await recorder.record("video.started", "Started video recording", {
-          path: videoPath,
+        actionVideoRecorder = new ActionClipRecorder({
+          driver: options.driver,
+          recorder,
+          clipsDir: videoClipsDir,
         });
       }
 
-      const rawVerdict = await options.director.run({
-        journey: options.journey,
-        profile: options.profile,
-        browser: options.driver,
-        recorder,
-        artifacts: {
-          runDir,
-          screenshotsDir,
-          snapshotsDir,
-          consoleDir,
-          networkDir,
-          uiChangesDir,
+      const rawVerdict = await runDirectorWithTimeout({
+        director: options.director,
+        timeoutMs: options.directorTimeoutMs,
+        context: {
+          journey: options.journey,
+          profile: options.profile,
+          browser: options.driver,
+          recorder,
+          artifacts: {
+            runDir,
+            screenshotsDir,
+            snapshotsDir,
+            consoleDir,
+            networkDir,
+            uiChangesDir,
+          },
+          uiChangeRecording: options.uiChangeRecording ?? true,
+          uiChangeRecordingOptions: options.uiChangeRecordingOptions,
+          actionVideoRecorder,
         },
-        uiChangeRecording: options.uiChangeRecording ?? true,
-        uiChangeRecordingOptions: options.uiChangeRecordingOptions,
       });
 
       assertNoValidationIssues(
@@ -218,14 +225,6 @@ export async function runJourney(
         },
       );
     } finally {
-      if (recordingStarted) {
-        await options.driver.stopRecording().catch(async (stopError) => {
-          const message =
-            stopError instanceof Error ? stopError.message : String(stopError);
-          await recorder.record("video.stop_failed", message);
-        });
-        recorder.stopVideoClock();
-      }
       await options.driver.close();
       driverClosed = true;
     }
@@ -315,98 +314,32 @@ export async function runJourney(
     }
   }
 
-  if (recordingStarted && (options.trimSolidColorVideoStart ?? true)) {
-    const trimResult = await trimLeadingSolidColorStart(videoPath);
-    if (trimResult.trimmed) {
-      videoOriginalPath = trimResult.originalPath;
-      recorder.shiftVideoTimeMs(trimResult.offsetMs);
-      videoProcessing = {
-        trimmedSolidColorStart: true,
-        trimOffsetMs: trimResult.offsetMs,
-        ...(trimResult.originalPath
-          ? { originalVideo: trimResult.originalPath }
-          : {}),
-      };
-      await recorder.record(
-        "video.trimmed",
-        `Trimmed ${trimResult.offsetMs}ms of solid-color video start`,
-        {
-          offsetMs: trimResult.offsetMs,
-          originalVideo: trimResult.originalPath,
-          video: videoPath,
-        },
-      );
-    } else {
-      videoProcessing = {
-        trimmedSolidColorStart: false,
-        trimOffsetMs: 0,
-      };
-      await recorder.record(
-        "video.trim_skipped",
-        `Skipped solid-color video trimming: ${trimResult.reason}`,
-        {
-          reason: trimResult.reason,
-        },
-      );
-    }
-  }
-
-  if (recordingStarted && (options.condenseStaticVideo ?? true)) {
-    const condenseResult = await condenseStaticFrameVideo(videoPath, {
-      preserveOriginal: !videoOriginalPath,
-      protectedTimesMs: recorder.timeline
-        .filter(isUiActionEvent)
-        .map((event) => event.videoTimeMs)
-        .filter((timeMs): timeMs is number => typeof timeMs === "number"),
-    });
-    if (condenseResult.condensed) {
-      videoOriginalPath = videoOriginalPath ?? condenseResult.originalPath;
-      recorder.applyVideoCuts(condenseResult.removedSegments);
-      videoProcessing = {
-        trimmedSolidColorStart:
-          videoProcessing?.trimmedSolidColorStart ?? false,
-        trimOffsetMs: videoProcessing?.trimOffsetMs ?? 0,
-        ...(videoProcessing?.originalVideo
-          ? { originalVideo: videoProcessing.originalVideo }
-          : videoOriginalPath
-            ? { originalVideo: videoOriginalPath }
-            : {}),
-        staticFrameCondensed: true,
-        staticFrameRemovedMs: condenseResult.removedMs,
-        staticFrameSegments: condenseResult.removedSegments,
-      };
-      await recorder.record(
-        "video.static_condensed",
-        `Removed ${condenseResult.removedMs}ms of static video`,
-        {
-          removedMs: condenseResult.removedMs,
-          removedSegments: condenseResult.removedSegments,
-          originalVideo: videoOriginalPath,
-          video: videoPath,
-        },
-      );
-    } else {
-      videoProcessing = {
-        trimmedSolidColorStart:
-          videoProcessing?.trimmedSolidColorStart ?? false,
-        trimOffsetMs: videoProcessing?.trimOffsetMs ?? 0,
-        ...(videoProcessing?.originalVideo
-          ? { originalVideo: videoProcessing.originalVideo }
-          : videoOriginalPath
-            ? { originalVideo: videoOriginalPath }
-            : {}),
-        staticFrameCondensed: false,
-        staticFrameRemovedMs: 0,
-        staticFrameSegments: [],
-      };
-      await recorder.record(
-        "video.static_condense_skipped",
-        `Skipped static video condensing: ${condenseResult.reason}`,
-        {
-          reason: condenseResult.reason,
-        },
-      );
-    }
+  const actionVideoClips = actionVideoRecorder?.clips() ?? [];
+  if (actionVideoClips.length > 0) {
+    const stitchResult = await stitchVideoClips(actionVideoClips, videoPath);
+    videoArtifactWritten = stitchResult.stitched;
+    videoProcessing = {
+      mode: "action-clips",
+      trimmedSolidColorStart: false,
+      trimOffsetMs: 0,
+      actionClipCount: actionVideoClips.length,
+      actionClipStitched: stitchResult.stitched,
+      ...(stitchResult.reason
+        ? { actionClipStitchReason: stitchResult.reason }
+        : {}),
+    };
+    await recorder.record(
+      stitchResult.stitched ? "video.clips_stitched" : "video.clips_stitch_skipped",
+      stitchResult.stitched
+        ? `Stitched ${actionVideoClips.length} action video clip(s)`
+        : `Skipped action video stitching: ${stitchResult.reason}`,
+      {
+        video: videoPath,
+        clipCount: actionVideoClips.length,
+        clips: actionVideoClips,
+        reason: stitchResult.reason,
+      },
+    );
   }
 
   const snapshotArtifacts = await listFiles(snapshotsDir);
@@ -426,8 +359,8 @@ export async function runJourney(
     dashboard: dashboardPath,
     report: reportPath,
     result: resultPath,
-    ...(recordingStarted ? { video: videoPath } : {}),
-    ...(videoOriginalPath ? { videoOriginal: videoOriginalPath } : {}),
+    ...(videoArtifactWritten ? { video: videoPath } : {}),
+    videoClips: actionVideoClips.map((clip) => clip.path),
     screenshots: await listFiles(screenshotsDir),
     snapshots: snapshotArtifacts,
     console: consoleArtifacts,
@@ -534,6 +467,132 @@ export async function runJourney(
   );
 
   return result;
+}
+
+class ActionClipRecorder implements ActionVideoRecorder {
+  private readonly recordedClips: ActionVideoClip[] = [];
+  private stitchedDurationMs = 0;
+  private sequence = 0;
+
+  constructor(
+    private readonly options: {
+      driver: RunJourneyOptions["driver"];
+      recorder: EventRecorder;
+      clipsDir: string;
+    },
+  ) {}
+
+  clips(): ActionVideoClip[] {
+    return [...this.recordedClips];
+  }
+
+  async record<T>(
+    action: {
+      actionKind: string;
+      target?: string;
+    },
+    execute: () => Promise<T>,
+  ): Promise<T> {
+    const index = ++this.sequence;
+    const startedAt = new Date();
+    const clipPath = join(
+      this.options.clipsDir,
+      `${String(index).padStart(3, "0")}-${sanitizeClipName(action.actionKind, action.target)}.webm`,
+    );
+    const timelineStartIndex = this.options.recorder.eventCount;
+    const stitchedStartMs = this.stitchedDurationMs;
+    let stopped = false;
+
+    await mkdir(this.options.clipsDir, { recursive: true });
+    await this.options.driver.startRecording(clipPath);
+    this.options.recorder.startVideoClock();
+    await this.options.recorder.record("video.clip_started", "Started action video clip", {
+      path: clipPath,
+      actionKind: action.actionKind,
+      target: action.target,
+    });
+
+    try {
+      return await execute();
+    } finally {
+      try {
+        await this.options.driver.stopRecording();
+        stopped = true;
+      } finally {
+        this.options.recorder.stopVideoClock();
+        const endedAt = new Date();
+        const durationMs = Math.max(0, endedAt.getTime() - startedAt.getTime());
+        this.options.recorder.offsetVideoTimeMsSince(
+          timelineStartIndex,
+          stitchedStartMs,
+        );
+        const clip: ActionVideoClip = {
+          id: `clip-${String(index).padStart(3, "0")}`,
+          path: clipPath,
+          actionKind: action.actionKind,
+          ...(action.target ? { target: action.target } : {}),
+          startedAt: startedAt.toISOString(),
+          endedAt: endedAt.toISOString(),
+          durationMs,
+          stitchedStartMs,
+          stitchedEndMs: stitchedStartMs + durationMs,
+        };
+        this.recordedClips.push(clip);
+        this.stitchedDurationMs += durationMs;
+        await this.options.recorder.record(
+          stopped ? "video.clip_completed" : "video.clip_stop_failed",
+          stopped ? "Completed action video clip" : "Action video clip stop failed",
+          clip,
+        );
+      }
+    }
+  }
+}
+
+function sanitizeClipName(actionKind: string, target: string | undefined): string {
+  const value = target ? `${actionKind}-${target}` : actionKind;
+  return value
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "action";
+}
+
+async function runDirectorWithTimeout(options: {
+  director: AgentDirector;
+  context: Omit<Parameters<AgentDirector["run"]>[0], "signal">;
+  timeoutMs?: number;
+}): Promise<AgentVerdict> {
+  if (!options.timeoutMs) {
+    return options.director.run(options.context);
+  }
+
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      options.director.run({
+        ...options.context,
+        signal: controller.signal,
+      }),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          reject(
+            new Error(
+              `Journey director timed out after ${options.timeoutMs}ms.`,
+            ),
+          );
+        }, options.timeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    controller.abort();
+  }
 }
 
 export function mergeBrowserEnvironments(

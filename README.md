@@ -270,7 +270,7 @@ npx journeytest run examples/journeys \
 
 With the default `agent-browser` driver, parallel journeys share one headless browser session and each journey gets its own labeled tab. This keeps parallel runs from launching one Chrome-for-Testing app per agent. Browser commands are safely serialized around tab switching, while Pi directors can still run concurrently.
 
-Tabs in a shared browser session share cookies, storage, cache, and history. `agent-browser` also supports one active video recording per session, so JourneyTest serializes shared-tab video recording per journey. For full browser-session isolation, or fully concurrent per-journey video recording, use:
+Tabs in a shared browser session share cookies, storage, cache, and history. `agent-browser` also supports one active video recording per session, so JourneyTest records short action clips by default and stitches them into the dashboard video after the run. This keeps shared-tab video serialization limited to the brief windows around clicks, fills, typing, key presses, hovers, drags, and uploads. For full browser-session isolation, or fully concurrent per-journey video recording, use:
 
 ```bash
 npx journeytest run examples/journeys \
@@ -284,7 +284,11 @@ npx journeytest run examples/journeys \
 
 In isolated-session mode, each journey gets its own Pi director, browser driver, run directory, and browser session. If you do not pass `--session`, JourneyTest uses the generated run id as the session name. If you pass `--session` with `--parallel-agents > 1`, the value is treated as a session prefix and each journey receives a unique derived browser session name.
 
+JourneyTest records only the short evidence windows around browser actions, then stitches those clips into `video.webm` so dashboard bookmarks still seek through one condensed video. Use `--no-video` to skip video entirely.
+
 Use `--retries <count>` to retry failing journeys. The final `run.json` keeps per-attempt metadata and marks journeys as flaky when they pass only after one or more failed attempts.
+
+Each journey director run has a wall-clock timeout. The default is 30 minutes per attempt; tune it with `--journey-timeout-ms <ms>`, or pass `--journey-timeout-ms 0` to disable it for an intentionally open-ended diagnostic run.
 
 For a single journey, the CLI prints that run's `dashboard.html` path and `file://` URL. For multiple journeys, it prints every run dashboard plus a generated suite dashboard:
 
@@ -346,7 +350,7 @@ The browser tool surface also supports targeted container scrolling, hover, drag
 
 ## Video Chapters
 
-Recorded videos get timestamped bookmarks from UI actions only, such as clicks, fills, typing, pressing keys, drags, scrolls, and hovers. Snapshot captures, screenshots, tool start/end events, and assistant-message events are not turned into bookmarks.
+Recorded videos get timestamped bookmarks from UI actions only, such as clicks, fills, typing, pressing keys, drags, uploads, and hovers. Snapshot captures, screenshots, tool start/end events, and assistant-message events are not turned into bookmarks. In action-clip mode, bookmark timestamps refer to the stitched condensed video rather than the original wall-clock journey time.
 
 By default, the CLI runs a post-run Pi bookmark curator using the same `--provider` and `--model`. The curator receives the action timeline plus nearby assistant text and can remove noisy action bookmarks or relabel them as concise chapter-style labels such as `Submit invite form`.
 
@@ -378,6 +382,36 @@ Define named environments in a lifecycle config file and pass it to `run`. Envir
 
 ```json
 {
+  "appLifecycle": {
+    "ports": {
+      "frontend": {},
+      "backend": {}
+    },
+    "app": {
+      "baseUrl": "http://$hosts.frontend:$ports.frontend",
+      "allowedOrigins": [
+        "http://$hosts.frontend:$ports.frontend",
+        "http://$hosts.backend:$ports.backend"
+      ]
+    },
+    "start": {
+      "command": "node",
+      "commandArgs": ["scripts/journeytest-services.mjs", "start"],
+      "env": {
+        "FRONTEND_PORT": "$ports.frontend",
+        "BACKEND_PORT": "$ports.backend"
+      },
+      "passContext": "json-stdin",
+      "cwd": "../my-app",
+      "timeoutMs": 60000
+    },
+    "cleanup": {
+      "command": "node",
+      "commandArgs": ["scripts/journeytest-services.mjs", "cleanup"],
+      "passContext": "json-stdin",
+      "cwd": "../my-app"
+    }
+  },
   "dataEnvironments": {
     "local-convex": {
       "provider": "convex",
@@ -415,6 +449,23 @@ npx journeytest run examples/journeys \
 ```
 
 The CLI default data lifecycle provider auto-routes each environment by its `provider` field. Use `--data-lifecycle-provider convex`, `script`, or `http` only when you intentionally want to force one provider factory.
+
+`appLifecycle` is for the app-under-test services: Docker compose stacks, frontend/backend dev servers, workers, or similar. JourneyTest allocates unused ports for each name in `ports`, expands `$ports.<name>` and `$hosts.<name>` in `app`, `commandArgs`, and `env`, then runs `start` before suite data lifecycle and journeys. If `app.baseUrl` is set, selected journeys run against that resolved URL instead of the URL authored in each journey file.
+
+Start and cleanup scripts receive a JSON context by argv, stdin, or not at all:
+
+```json
+{
+  "phase": "start",
+  "suiteRunId": "2026-06-28T210000-run",
+  "runDir": "runs/2026-06-28T210000-run/_app-lifecycle",
+  "ports": { "frontend": 51749, "backend": 51750 },
+  "hosts": { "frontend": "127.0.0.1", "backend": "127.0.0.1" },
+  "app": { "baseUrl": "http://127.0.0.1:51749" }
+}
+```
+
+The start script should launch or reuse services, wait until they are healthy, then exit. The cleanup script runs after suite cleanup, and JourneyTest also attempts it on `SIGINT` or `SIGTERM`. Script stdout, stderr, exit code, parsed JSON output, and cleanup results are written under `_app-lifecycle/`.
 
 Each journey can reference an environment and app-owned lifecycle operations:
 
@@ -466,16 +517,9 @@ For `http` environments, `function` is an endpoint path under `url` unless it is
 
 Use `--keep-data` to skip cleanup while debugging. Convex HTTP transport requires the app project to expose test-gated public functions. Convex CLI transport uses `npx convex run` from `projectDir` and can target internal functions when the environment declares that capability.
 
-## Video Start Trimming
+## Action Clip Video
 
-When video recording is enabled, the runner attempts two conservative cleanup passes:
-
-- Trim a leading section where every decoded pixel is the same exact RGB color. This removes blank app-loading lead-in.
-- Condense long static sections where sampled frames are identical, which removes dead air while the agent/model is thinking between browser actions.
-
-The first video-modifying pass preserves the original recording as `video.original.webm`. Video timestamps and bookmarks are shifted by the same removed durations.
-
-These optional processors use `ffmpeg`/`ffprobe` when available and leave the video untouched if they cannot sample or edit confidently. Disable them with `--no-trim-solid-video` and `--no-condense-static-video`.
+When video recording is enabled, JourneyTest records around browser actions such as clicks, fills, typing, key presses, hovers, drags, and uploads. Each action clip is saved under `video-clips/`, then the clips are stitched into `video.webm` when `ffmpeg` is available. The dashboard uses the stitched video, so action bookmarks seek to the relevant condensed timestamp without preserving model-thinking dead air.
 
 ## Verdict Ownership
 

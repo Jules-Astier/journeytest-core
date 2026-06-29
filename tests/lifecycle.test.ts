@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DataLifecycleConfigSchema } from "../src/core/schemas.js";
 import {
+  AppLifecycleController,
+  applyAppTargetOverride,
   DataLifecycleBlockedError,
   DataLifecycleController,
   HttpDataLifecycleProvider,
@@ -324,6 +326,78 @@ describe("data lifecycle providers", () => {
     } finally {
       await closeServer(server);
     }
+  });
+});
+
+describe("app lifecycle scripts", () => {
+  it("allocates requested ports, resolves app targets, and runs cleanup", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "journeytest-app-lifecycle-"));
+    const cleanupPath = join(tempDir, "cleanup.json");
+    const cleanupScript = join(tempDir, "cleanup.mjs");
+    await writeFile(
+      cleanupScript,
+      [
+        'import { writeFile } from "node:fs/promises";',
+        'const context = JSON.parse(process.argv[2] ?? "{}");',
+        `await writeFile(${JSON.stringify(cleanupPath)}, JSON.stringify({ phase: context.phase, port: context.ports.frontend }));`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const config = DataLifecycleConfigSchema.parse({
+      dataEnvironments: {},
+      appLifecycle: {
+        ports: {
+          frontend: {},
+        },
+        app: {
+          baseUrl: "http://$hosts.frontend:$ports.frontend",
+          allowedOrigins: ["http://$hosts.frontend:$ports.frontend"],
+        },
+        start: {
+          command: process.execPath,
+          commandArgs: [
+            "-e",
+            "console.log(JSON.stringify({ app: { name: 'Dynamic App' } }))",
+          ],
+        },
+        cleanup: {
+          command: process.execPath,
+          commandArgs: [cleanupScript],
+        },
+      },
+    });
+    const controller = await AppLifecycleController.create({
+      config: config.appLifecycle!,
+      suiteRunId: "suite-app",
+      runDir: join(tempDir, "artifacts"),
+    });
+
+    await controller.runStart();
+    await controller.runCleanup();
+
+    expect(controller.appTarget?.name).toBe("Dynamic App");
+    expect(controller.appTarget?.baseUrl).toMatch(
+      /^http:\/\/127\.0\.0\.1:\d+$/,
+    );
+    expect(controller.result.start?.status).toBe("passed");
+    expect(controller.result.cleanup?.status).toBe("passed");
+    expect(JSON.parse(await readFile(cleanupPath, "utf8"))).toMatchObject({
+      phase: "cleanup",
+      port: controller.result.context.ports.frontend,
+    });
+
+    const journey = applyAppTargetOverride(
+      {
+        app: {
+          name: "Original",
+          baseUrl: "http://127.0.0.1:3000",
+          allowedOrigins: ["http://127.0.0.1:3000"],
+        },
+      },
+      controller.appTarget,
+    );
+    expect(journey.app.baseUrl).toBe(controller.appTarget?.baseUrl);
   });
 });
 

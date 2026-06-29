@@ -1004,8 +1004,16 @@ function renderOverview(result: RunResult): string {
     ${renderMetric("Verdict", result.verdict?.status ?? "none")}
     ${result.browserEnvironment ? renderMetric("Browser", formatBrowserEnvironment(result.browserEnvironment)) : ""}
     ${result.dataLifecycle ? renderMetric("Data Lifecycle", result.dataLifecycle.status) : ""}
-    ${result.videoProcessing ? renderMetric("Video Trim", result.videoProcessing.trimmedSolidColorStart ? formatDuration(result.videoProcessing.trimOffsetMs) : "none") : ""}
+    ${result.videoProcessing ? renderMetric("Video Clips", formatVideoClipMetric(result.videoProcessing)) : ""}
   </div>`;
+}
+
+function formatVideoClipMetric(processing: NonNullable<RunResult["videoProcessing"]>): string {
+  if (processing.actionClipCount !== undefined) {
+    return `${processing.actionClipCount} ${processing.actionClipStitched ? "stitched" : "clips"}`;
+  }
+
+  return "none";
 }
 
 function formatBrowserEnvironment(
